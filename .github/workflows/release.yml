@@ -1,21 +1,88 @@
 name: Release
 
-# Push a tag like v0.1.0 to build static musl binaries and publish a GitHub release
-# with SHA256SUMS (the format scripts/install.sh verifies).
+# Releases are cut by merging a pull request:
+#
+# 1. On every push to main, release-please keeps a "chore: release X.Y.Z" pull request
+#    open. It bumps Cargo.toml and Cargo.lock and writes CHANGELOG.md from the
+#    conventional commit messages (fix: patch, feat: minor, feat!: major).
+# 2. Merging that pull request makes release-please create the vX.Y.Z tag and the
+#    GitHub release, and the jobs below build static musl binaries and attach them
+#    with SHA256SUMS (the format scripts/install.sh verifies) and the installer.
+#
+# Run it by hand with a tag to rebuild and re-upload the binaries of an existing release.
+# (Tags created by GITHUB_TOKEN do not start other workflows, so building happens here,
+# in the same run, rather than in a separate on-tag workflow.)
 on:
   push:
-    tags: ['v*']
+    branches: [main]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to rebuild, e.g. v0.2.1
+        required: true
 
 permissions:
   contents: read
 
 jobs:
+  release-please:
+    name: Release pull request
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      created: ${{ steps.release.outputs.release_created }}
+      tag: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - id: release
+        uses: googleapis/release-please-action@v4
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  target:
+    name: Pick the release to build
+    needs: release-please
+    # Runs after release-please, or on its own for a manual rebuild.
+    if: always() && (needs.release-please.outputs.created == 'true' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - id: tag
+        env:
+          CREATED: ${{ needs.release-please.outputs.tag }}
+          REQUESTED: ${{ inputs.tag }}
+        run: |
+          tag="${CREATED:-$REQUESTED}"
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::not a release tag: '$tag'"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
   web:
     name: Build web UI
+    needs: target
+    if: always() && needs.target.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.target.outputs.tag }}
+      # The binary reports (and the update check compares) the Cargo.toml version, so a
+      # tag that disagrees would publish a release that calls itself something else.
+      - name: Check the tag matches Cargo.toml
+        env:
+          TAG: ${{ needs.target.outputs.tag }}
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          if [ "v$version" != "$TAG" ]; then
+            echo "::error::tag $TAG does not match Cargo.toml version $version"
+            exit 1
+          fi
       - uses: pnpm/action-setup@v4
         with:
           version: 12
@@ -36,7 +103,8 @@ jobs:
 
   build:
     name: Build ${{ matrix.target }}
-    needs: web
+    needs: [target, web]
+    if: always() && needs.web.result == 'success'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: true
@@ -44,6 +112,8 @@ jobs:
         target: [x86_64-unknown-linux-musl, aarch64-unknown-linux-musl]
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.target.outputs.tag }}
       - uses: actions/download-artifact@v4
         with:
           name: web-dist
@@ -75,15 +145,17 @@ jobs:
           path: forgenerd-${{ matrix.target }}
           if-no-files-found: error
 
-  release:
-    name: Publish release
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+  publish:
+    name: Attach binaries to the release
+    needs: [target, build]
+    if: always() && needs.build.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.target.outputs.tag }}
       - uses: actions/download-artifact@v4
         with:
           pattern: forgenerd-*
@@ -92,9 +164,8 @@ jobs:
       - name: Checksums
         working-directory: dist
         run: sha256sum forgenerd-* > SHA256SUMS && cat SHA256SUMS
-      - name: Create release
+      - name: Upload to the release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create "$GITHUB_REF_NAME" dist/* scripts/install.sh \
-            --title "$GITHUB_REF_NAME" --generate-notes --verify-tag
+          TAG: ${{ needs.target.outputs.tag }}
+        run: gh release upload "$TAG" dist/* scripts/install.sh --clobber
