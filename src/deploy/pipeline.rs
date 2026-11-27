@@ -312,20 +312,24 @@ async fn execute(
         remove_logged(&*executor, old, log).await;
     }
 
+    // Publish the new deployment and retire the previous one atomically. Otherwise an
+    // observer can see the candidate as healthy while the old deployment is still healthy.
+    let mut tx = state.db.begin().await?;
     sqlx::query(
         "UPDATE deployments SET status = 'healthy', finished_at = CURRENT_TIMESTAMP WHERE id = ?",
     )
     .bind(deployment_id)
-    .execute(&state.db)
+    .execute(&mut *tx)
     .await?;
     if rollback && let Some(previous) = &app.active_deployment_id {
         sqlx::query(
             "UPDATE deployments SET status = 'rolled_back' WHERE id = ? AND status = 'healthy'",
         )
         .bind(previous)
-        .execute(&state.db)
+        .execute(&mut *tx)
         .await?;
     }
+    tx.commit().await?;
     log.line("deployment healthy".into()).await;
 
     // Keep the images of recent healthy deployments for rollback; drop the rest.
