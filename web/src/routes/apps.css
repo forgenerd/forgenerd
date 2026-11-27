@@ -1,0 +1,98 @@
+.app-create-dialog {
+	width: min(calc(100vw - 2rem), 34rem);
+	max-height: min(90vh, 42rem);
+	margin: auto;
+	padding: 0;
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	background: var(--surface);
+	color: var(--text);
+	box-shadow: var(--shadow);
+	overflow: hidden;
+}
+
+.app-create-dialog::backdrop {
+	background: rgb(0 0 0 / 72%);
+}
+
+.app-create-dialog-header {
+	display: flex;
+	align-items: center;
+	gap: 0.75rem;
+	min-height: 3.5rem;
+	padding: 0.75rem 1.25rem;
+	border-bottom: 1px solid var(--line);
+	color: var(--text);
+}
+
+.app-create-dialog-header h2 {
+	flex: 1;
+	font-size: 16px;
+	font-weight: 600;
+}
+
+.app-create-dialog-body {
+	display: grid;
+	gap: 1.25rem;
+	padding: 1.25rem;
+	overflow-y: auto;
+}
+
+.app-create-name-row {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	gap: 0;
+}
+
+.app-create-name-row .input {
+	border-radius: 4px 0 0 4px;
+}
+
+.app-create-name-row .btn {
+	border-radius: 0 4px 4px 0;
+}
+
+.app-create-field {
+	display: grid;
+	gap: 0.35rem;
+}
+
+.app-create-checkbox {
+	display: flex;
+	align-items: center;
+	gap: 0.65rem;
+	cursor: pointer;
+}
+
+.app-create-divider {
+	display: flex;
+	align-items: center;
+	gap: 0.75rem;
+	color: var(--muted);
+	font-size: 13px;
+}
+
+.app-create-divider::before,
+.app-create-divider::after {
+	content: '';
+	height: 1px;
+	flex: 1;
+	background: var(--line);
+}
+
+.app-create-blueprints {
+	justify-self: center;
+	border-style: dashed;
+}
+
+@media (max-width: 480px) {
+	.app-create-name-row {
+		grid-template-columns: 1fr;
+		gap: 0.5rem;
+	}
+
+	.app-create-name-row .input,
+	.app-create-name-row .btn {
+		border-radius: 4px;
+	}
+}

@@ -1,0 +1,59 @@
+[package]
+name = "forgenerd"
+version = "0.1.0"
+license = "Apache-2.0"
+edition = "2024"
+
+[dependencies]
+aes-gcm = "0.11.1"
+anyhow = "1.0.105"
+argon2 = "0.6.0"
+async-trait = "0.1.92"
+axum = { version = "0.8.9", features = ["ws"] }
+axum-extra = { version = "0.12.6", features = ["cookie", "typed-header"] }
+base64 = "0.23.1"
+bollard = "0.21.1"
+chrono = { version = "0.4.45", features = ["serde"] }
+clap = { version = "4.6.9", features = ["derive"] }
+cookie = "0.18"
+croner = "5.0.0"
+der = "0.8.3"
+flate2 = "1.1.11"
+futures-util = { version = "0.3.34", default-features = false, features = ["alloc", "std"] }
+hex = "0.4.3"
+hmac = "0.13.0"
+http-body-util = "0.1.5"
+indexmap = { version = "2.2.1", features = ["serde"] }
+hyper = { version = "1.13.0", features = ["client", "http1"] }
+hyper-util = { version = "0.1.21", features = ["tokio"] }
+libc = "0.2.191"
+mime_guess = "2.0.5"
+rand = "0.10.4"
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json", "stream"] }
+rust-embed = "8.14.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+serde_yaml_ng = "0.10.0"
+sha2 = "0.11.1"
+sqlx = { version = "0.9.1", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "chrono", "derive", "macros"] }
+subtle = "2.6.1"
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "signal", "fs", "sync", "time", "process", "io-util"] }
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["aws-lc-rs", "logging", "tls12"] }
+tokio-util = { version = "0.7.20", features = ["io"] }
+tower-http = { version = "0.7.1", features = ["trace"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+uuid = { version = "1.29.3", features = ["v7"] }
+x509-cert = "0.3.1"
+
+[dev-dependencies]
+rcgen = { version = "0.14.10", default-features = false, features = ["aws_lc_rs", "pem"] }
+tempfile = "3.27.0"
+tokio-tungstenite = "0.30.0"
+tower = { version = "0.5.3", features = ["util"] }
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = true

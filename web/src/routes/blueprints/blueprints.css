@@ -1,0 +1,147 @@
+.blueprint-dialog {
+	width: min(calc(100vw - 2rem), 42rem);
+	max-height: min(90vh, 52rem);
+	margin: auto;
+	padding: 0;
+	border: 1px solid var(--line);
+	border-radius: 10px;
+	background: var(--surface);
+	color: var(--text);
+	box-shadow: var(--shadow);
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+}
+
+.blueprint-dialog:not([open]) {
+	display: none;
+}
+
+.blueprint-dialog::backdrop {
+	background: rgb(0 0 0 / 68%);
+}
+
+.blueprint-dialog > header {
+	flex: 0 0 auto;
+}
+
+.blueprint-row {
+	display: grid;
+	grid-template-columns: 4rem minmax(0, 1fr) auto;
+	align-items: center;
+	gap: 1.25rem;
+	width: 100%;
+	padding: 1rem 1.25rem;
+	border: 0;
+	background: var(--surface);
+	color: var(--text);
+	text-align: left;
+	cursor: pointer;
+	transition: background-color 120ms ease-out;
+}
+
+.blueprint-dialog-form {
+	display: flex;
+	min-height: 0;
+	flex: 1;
+	flex-direction: column;
+}
+
+.blueprint-dialog-body {
+	min-height: 0;
+	overflow-y: auto;
+}
+
+.blueprint-dialog-footer {
+	flex: 0 0 auto;
+	background: var(--surface);
+}
+
+.blueprint-row:hover {
+	background: var(--hover);
+}
+
+.blueprint-row-logo {
+	display: grid;
+	place-items: center;
+	width: 4rem;
+	height: 4rem;
+	padding: 0.5rem;
+	border: 1px solid var(--line);
+	border-radius: 6px;
+	background: #fff;
+}
+
+.blueprint-row-logo img {
+	display: block;
+	max-width: 100%;
+	max-height: 100%;
+	object-fit: contain;
+}
+
+.blueprint-row-content {
+	min-width: 0;
+}
+
+.blueprint-row-heading {
+	display: flex;
+	align-items: center;
+	gap: 0.45rem;
+}
+
+.blueprint-row-title {
+	font-size: 15px;
+	font-weight: 600;
+}
+
+.blueprint-row-description {
+	display: block;
+	max-width: 70ch;
+	margin-top: 0.35rem;
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 1.45;
+}
+
+.blueprint-row-side {
+	display: grid;
+	justify-items: end;
+	gap: 0.35rem;
+	min-width: 6.5rem;
+	padding-left: 1.25rem;
+	border-left: 1px solid var(--line);
+	font-size: 12px;
+}
+
+.blueprint-row-port {
+	color: var(--muted);
+}
+
+.blueprint-row-action {
+	color: var(--accent-text);
+	font-weight: 500;
+}
+
+@media (max-width: 639px) {
+	.blueprint-row {
+		grid-template-columns: 3.5rem minmax(0, 1fr);
+		gap: 0.9rem;
+		padding: 0.9rem 1rem;
+	}
+
+	.blueprint-row-logo {
+		width: 3.5rem;
+		height: 3.5rem;
+	}
+
+	.blueprint-row-side {
+		grid-column: 2;
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		min-width: 0;
+		padding: 0.6rem 0 0;
+		border-top: 1px solid var(--line);
+		border-left: 0;
+	}
+}

@@ -1,0 +1,29 @@
+id: postgres
+name: PostgreSQL
+description: PostgreSQL 18 with a persistent volume. Other apps connect at <app-name>:5432.
+service: postgres
+port: 5432
+image: postgres
+image_tag: 18-alpine
+env:
+  POSTGRES_USER: { value: app, description: PostgreSQL application user, secret: false }
+  POSTGRES_DB: { value: app, description: PostgreSQL application database, secret: false }
+  POSTGRES_PASSWORD: { description: Password for the PostgreSQL application user, generate: true }
+connection: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@{host}:5432/${POSTGRES_DB}
+compose: |
+  services:
+    postgres:
+      image: postgres:${IMAGE_TAG}
+      environment:
+        POSTGRES_USER: ${POSTGRES_USER}
+        POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+        POSTGRES_DB: ${POSTGRES_DB}
+      volumes:
+        - data:/var/lib/postgresql
+      healthcheck:
+        test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+        interval: 5s
+        timeout: 3s
+        retries: 20
+  volumes:
+    data:
