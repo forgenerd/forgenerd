@@ -126,6 +126,7 @@ It reads the new password from standard input and signs out every session.
 | `FORGENERD_LISTEN` | `127.0.0.1:4367` | Binary default. The installer uses `0.0.0.0:4367` for new installs unless `--private-panel` is passed |
 | `FORGENERD_MASTER_KEY` | read from `master.key` | Base64 32-byte key that encrypts secrets |
 | `FORGENERD_REPO` | `forgenerd/forgenerd` | GitHub `owner/name` that updates are installed from and checked against |
+| `FORGENERD_BLUEPRINTS_URL` | the official catalog | URL of the blueprint catalog (`catalog.json` from [forgenerd/blueprints](https://github.com/forgenerd/blueprints)); downloaded at startup and every 6 hours |
 | `RUST_LOG` | `info` | Log level |
 
 ## Building from source

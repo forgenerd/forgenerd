@@ -169,16 +169,46 @@ export interface BlueprintParameter {
 	description: string;
 	secret: boolean;
 	generate: boolean;
+	/** No default: the deploy form must supply a value. */
+	required: boolean;
+	/** Defaults to the app's public URL, filled in at deploy time. */
+	public_url: boolean;
 }
 
 export interface Blueprint {
 	id: string;
 	name: string;
+	/** Databases, Apps or Admin tools. */
+	category: string;
 	description: string;
+	/** Served publicly on the app's domain (web apps); databases stay internal. */
+	expose: boolean;
+	/** data:image/png;base64,... from the catalog. */
+	logo: string | null;
 	port: number;
 	image: string;
 	image_tag: string;
 	parameters: BlueprintParameter[];
+}
+
+export interface BlueprintList {
+	blueprints: Blueprint[];
+	/** When the catalog was downloaded; null until the first download. */
+	updated_at: string | null;
+	/** Why the last refresh failed; the previous catalog is still listed. */
+	error: string | null;
+}
+
+export interface BlueprintDeployed {
+	app: { id: string; name: string };
+	deployment_id: string;
+	internal_host: string;
+	/** Includes generated credentials; shown only in this response. */
+	connection_string: string | null;
+	/** Where an exposed app is served; null until a root domain is set. */
+	url: string | null;
+	/** Generated passwords and keys; shown only in this response. */
+	generated: { key: string; value: string }[];
 }
 
 export interface S3Target {

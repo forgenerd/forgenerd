@@ -1,19 +1,11 @@
 <script lang="ts">
 	import Icon from '#lib/components/Icon.svelte';
 	import { onMount } from 'svelte';
-	import { get, post, errorMessage, type Blueprint, type Project } from '#lib/api.ts';
+	import { get, post, errorMessage, type Blueprint, type BlueprintDeployed, type BlueprintList, type Project } from '#lib/api.ts';
+	import { ago } from '#lib/format.ts';
 	import Copy from '#lib/components/Copy.svelte';
 	import Skeleton from '#lib/components/Skeleton.svelte';
 	import './blueprints.css';
-	import mysqlLogo from '../../../../blueprints/logos/mysql.png';
-	import postgresLogo from '../../../../blueprints/logos/postgres.png';
-	import redisLogo from '../../../../blueprints/logos/redis.png';
-
-	const blueprintLogos: Record<string, string> = {
-		mysql: mysqlLogo,
-		postgres: postgresLogo,
-		redis: redisLogo
-	};
 
 	let blueprints = $state<Blueprint[]>([]);
 	let projects = $state<Project[]>([]);
@@ -27,7 +19,28 @@
 	let busy = $state(false);
 	let loaded = $state(false);
 	let error = $state('');
-	let result = $state<{ app: { id: string; name: string }; connection_string: string | null; internal_host: string; blueprint: Blueprint } | null>(null);
+	let catalogUpdated = $state<string | null>(null);
+	let catalogError = $state<string | null>(null);
+	let refreshing = $state(false);
+
+	function applyCatalog(list: BlueprintList) {
+		blueprints = list.blueprints;
+		catalogUpdated = list.updated_at;
+		catalogError = list.error;
+	}
+
+	async function refreshCatalog() {
+		refreshing = true;
+		try {
+			applyCatalog(await post<BlueprintList>('/blueprints/refresh'));
+		} catch (e) {
+			catalogError = errorMessage(e);
+		} finally {
+			refreshing = false;
+		}
+	}
+	let result = $state<(BlueprintDeployed & { blueprint: Blueprint }) | null>(null);
+	const resultHasSecrets = $derived(!!result && (!!result.connection_string || result.generated.length > 0));
 
 	$effect(() => {
 		if (!dialog) return;
@@ -37,7 +50,9 @@
 
 	onMount(async () => {
 		try {
-			[blueprints, projects] = await Promise.all([get<Blueprint[]>('/blueprints'), get<Project[]>('/projects')]);
+			const [list, nextProjects] = await Promise.all([get<BlueprintList>('/blueprints'), get<Project[]>('/projects')]);
+			applyCatalog(list);
+			projects = nextProjects;
 			projectId = projects[0]?.id ?? '';
 		} catch (e) {
 			error = errorMessage(e);
@@ -49,12 +64,23 @@
 	const visible = $derived(
 		blueprints.filter((blueprint) => {
 			const needle = query.trim().toLowerCase();
-			return !needle || `${blueprint.name} ${blueprint.description}`.toLowerCase().includes(needle);
+			return !needle || `${blueprint.name} ${blueprint.category} ${blueprint.description}`.toLowerCase().includes(needle);
 		})
 	);
 
-	function logoFor(id: string) {
-		return blueprintLogos[id];
+	// Categories in the order the server lists them (databases first).
+	const groups = $derived(
+		visible.reduce<{ category: string; items: Blueprint[] }[]>((acc, blueprint) => {
+			const group = acc.find((g) => g.category === blueprint.category);
+			if (group) group.items.push(blueprint);
+			else acc.push({ category: blueprint.category, items: [blueprint] });
+			return acc;
+		}, [])
+	);
+
+
+	function initials(name: string) {
+		return name.replace(/[^A-Za-z0-9]/g, '').slice(0, 2);
 	}
 
 	function parameterLabel(key: string) {
@@ -87,10 +113,12 @@
 			let pid = projectId;
 			if (!pid) pid = (await post<Project>('/projects', { name: 'default' })).id;
 			const blueprint = selected;
-			const r = await post<{ app: { id: string; name: string }; connection_string: string | null; internal_host: string }>(
-				`/blueprints/${blueprint.id}/deploy`,
-				{ project_id: pid, name: name.trim(), image_tag: imageTag.trim(), env: values }
-			);
+			const r = await post<BlueprintDeployed>(`/blueprints/${blueprint.id}/deploy`, {
+				project_id: pid,
+				name: name.trim(),
+				image_tag: imageTag.trim(),
+				env: values
+			});
 			result = { ...r, blueprint };
 			selected = null;
 		} catch (err) {
@@ -100,6 +128,15 @@
 		}
 	}
 </script>
+
+{#snippet logo(blueprint: Blueprint, cls: string)}
+	{@const src = blueprint.logo}
+	{#if src}
+		<span class="blueprint-logo {cls}"><img {src} alt="" /></span>
+	{:else}
+		<span class="blueprint-logo is-initials {cls}" aria-hidden="true">{initials(blueprint.name)}</span>
+	{/if}
+{/snippet}
 
 
 	<dialog
@@ -111,9 +148,7 @@
 		{#if selected}
 			<header class="flex items-start justify-between gap-4 border-b border-line px-6 py-5">
 				<div class="flex min-w-0 items-center gap-4">
-					<div class="grid size-12 shrink-0 place-items-center rounded-lg bg-white p-2">
-						<img src={logoFor(selected.id)} alt="" class="max-h-full max-w-full object-contain" />
-					</div>
+					{@render logo(selected, 'size-12 rounded-lg')}
 					<div class="min-w-0">
 						<h2 id="blueprint-dialog-title" class="truncate text-[18px] font-semibold">{selected.name}</h2>
 					</div>
@@ -129,7 +164,11 @@
 							<label>
 								<span class="label">App name</span>
 								<input class="input" bind:value={name} required pattern="[a-z0-9]([a-z0-9-]*[a-z0-9])?" autocomplete="off" />
-								<code class="mt-1 block text-xs text-muted" title="Internal address">{name || 'name'}:{selected.port}</code>
+								{#if selected.expose}
+									<span class="mt-1 block text-xs text-muted">Public web app, served at <code>{name || 'name'}.&lt;root domain&gt;</code></span>
+								{:else}
+									<code class="mt-1 block text-xs text-muted" title="Internal address">{name || 'name'}:{selected.port}</code>
+								{/if}
 							</label>
 
 							{#if projects.length > 0}
@@ -150,6 +189,7 @@
 
 					<section class="mt-6 border-t border-line pt-5">
 						<h3 class="text-[14px] font-semibold">Configuration</h3>
+						{#if selected.parameters.length === 0}<p class="mt-2 text-[13px] text-muted">Nothing to configure.</p>{/if}
 						<div class="mt-4 grid gap-5 sm:grid-cols-2">
 							{#each selected.parameters as parameter (parameter.key)}
 								<label>
@@ -158,11 +198,11 @@
 										class="input"
 										type={parameter.secret ? 'password' : 'text'}
 										bind:value={values[parameter.key]}
-										required={!parameter.generate}
+										required={parameter.required}
 										autocomplete={parameter.secret ? 'new-password' : 'off'}
-										placeholder={parameter.generate ? 'Auto-generated' : undefined}
-										title={parameter.description || undefined}
+										placeholder={parameter.generate ? 'Auto-generated' : parameter.public_url ? "The app's URL" : undefined}
 									/>
+									{#if parameter.description}<span class="mt-1 block text-xs text-muted">{parameter.description}</span>{/if}
 								</label>
 							{/each}
 						</div>
@@ -185,24 +225,63 @@
 			<Icon name="search" size={18} class="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-muted" />
 			<input class="input pl-8" placeholder="Search blueprints" bind:value={query} aria-label="Search blueprints" />
 		</label>
+		<div class="flex items-center gap-3 text-[13px] text-muted">
+			{#if catalogUpdated}<span title="Blueprints come from the forgenerd/blueprints catalog">Catalog updated {ago(catalogUpdated)}</span>{/if}
+			<button class="btn btn-sm" onclick={refreshCatalog} disabled={refreshing}>
+				<Icon name={refreshing ? 'progress_activity' : 'refresh'} size={17} class={refreshing ? 'animate-spin motion-reduce:animate-none' : ''} />
+				{refreshing ? 'Refreshing…' : 'Refresh'}
+			</button>
+		</div>
 	</div>
 
-	{#if result}
-		<section class="mt-5 rounded-lg border border-warn/40 bg-warn-soft p-5" aria-live="polite">
-			<h2 class="flex items-center gap-2 text-[14px] font-semibold"><Icon name="warning" size={19} class="text-warn" /> Copy the connection string now</h2>
-			<p class="mt-1 text-[13px] text-muted">
-				Shown once. Deploying as <a class="link" href="/apps/{result.app.id}">{result.app.name}</a>.
-			</p>
-			{#if result.connection_string}
-				<div class="mt-3 flex items-center gap-1">
-					<code class="input flex items-center overflow-x-auto bg-surface whitespace-nowrap">{result.connection_string}</code>
-					<Copy value={result.connection_string} label="Copy connection string" />
-				</div>
-			{/if}
-			<button class="btn btn-sm mt-3" onclick={() => (result = null)}>I've saved it</button>
-		</section>
+	{#if catalogError}
+		<p role="alert" class="mt-4 rounded-md bg-bad-soft px-3 py-2 text-[13px] text-bad">
+			Could not update the blueprint catalog: {catalogError}{blueprints.length ? ' Showing the last catalog downloaded.' : ''}
+		</p>
 	{/if}
 
+	{#if result}
+		<section class="mt-5 rounded-lg border p-5 {resultHasSecrets ? 'border-warn/40 bg-warn-soft' : 'border-ok/40 bg-ok-soft'}" aria-live="polite">
+			{#if resultHasSecrets}
+				<h2 class="flex items-center gap-2 text-[14px] font-semibold"><Icon name="warning" size={19} class="text-warn" /> Save these now</h2>
+				<p class="mt-1 text-[13px] text-muted">
+					Shown once: secrets are stored encrypted and never displayed again. Deploying as <a class="link" href="/apps/{result.app.id}">{result.app.name}</a>.
+				</p>
+			{:else}
+				<h2 class="flex items-center gap-2 text-[14px] font-semibold"><Icon name="check_circle" size={19} class="text-ok" filled /> Deploying {result.blueprint.name}</h2>
+				<p class="mt-1 text-[13px] text-muted">Follow it on <a class="link" href="/apps/{result.app.id}">{result.app.name}</a>.</p>
+			{/if}
+			<dl class="mt-3 grid gap-2 text-[13px]">
+				{#if result.url}
+					<div>
+						<dt class="label">Address</dt>
+						<dd><a class="link inline-flex items-center gap-1" href={result.url} target="_blank" rel="noopener noreferrer">{result.url} <Icon name="open_in_new" size={15} /></a></dd>
+					</div>
+				{:else if result.blueprint.expose}
+					<p class="text-muted">Set a root domain in <a class="link" href="/settings">Settings</a>, or add a domain on the app's Domains tab, to open it.</p>
+				{/if}
+				{#if result.connection_string}
+					<div>
+						<dt class="label">Connection string</dt>
+						<dd class="flex items-center gap-1">
+							<code class="input flex items-center overflow-x-auto bg-surface whitespace-nowrap">{result.connection_string}</code>
+							<Copy value={result.connection_string} label="Copy connection string" />
+						</dd>
+					</div>
+				{/if}
+				{#each result.generated as item (item.key)}
+					<div>
+						<dt class="label">{parameterLabel(item.key)}</dt>
+						<dd class="flex items-center gap-1">
+							<code class="input flex items-center overflow-x-auto bg-surface whitespace-nowrap">{item.value}</code>
+							<Copy value={item.value} label="Copy {parameterLabel(item.key)}" />
+						</dd>
+					</div>
+				{/each}
+			</dl>
+			<button class="btn btn-sm mt-3" onclick={() => (result = null)}>{resultHasSecrets ? "I've saved them" : 'Close'}</button>
+		</section>
+	{/if}
 	{#if error}
 		<p role="alert" class="mt-5 rounded-md bg-bad-soft px-3 py-2 text-[13px] text-bad">{error}</p>
 	{:else if !loaded}
@@ -221,28 +300,37 @@
 			{/each}
 		</ul>
 	{:else}
-		<ul class="panel mt-5 divide-y divide-line overflow-hidden">
-			{#each visible as blueprint (blueprint.id)}
-				<li>
-					<button type="button" class="group blueprint-row" onclick={() => start(blueprint)} aria-label="Configure {blueprint.name}">
-						<span class="blueprint-row-logo">
-							<img src={logoFor(blueprint.id)} alt="" />
-						</span>
-						<span class="blueprint-row-content">
-							<span class="blueprint-row-heading">
-								<span class="blueprint-row-title">{blueprint.name}</span>
-								<Icon name="chevron_right" size={19} class="shrink-0 text-muted transition-transform group-hover:translate-x-0.5" />
-							</span>
-							<span class="blueprint-row-description">{blueprint.description}</span>
-						</span>
-						<span class="blueprint-row-side">
-							<span class="blueprint-row-port mono">{blueprint.port}/tcp</span>
-							<span class="blueprint-row-action">Configure</span>
-						</span>
-					</button>
-				</li>
-			{:else}
-				<li class="px-5 py-10 text-center text-muted">No blueprints match “{query}”.</li>
-			{/each}
-		</ul>
+		{#each groups as group (group.category)}
+			<section class="mt-5" aria-labelledby="blueprints-{group.category}">
+				<h2 id="blueprints-{group.category}" class="mb-2 text-[13px] font-semibold text-muted">{group.category} <span class="font-normal">({group.items.length})</span></h2>
+				<ul class="panel divide-y divide-line overflow-hidden">
+					{#each group.items as blueprint (blueprint.id)}
+						<li>
+							<button type="button" class="group blueprint-row" onclick={() => start(blueprint)} aria-label="Configure {blueprint.name}">
+								{@render logo(blueprint, 'blueprint-row-logo')}
+								<span class="blueprint-row-content">
+									<span class="blueprint-row-heading">
+										<span class="blueprint-row-title">{blueprint.name}</span>
+										<Icon name="chevron_right" size={19} class="shrink-0 text-muted transition-transform group-hover:translate-x-0.5" />
+									</span>
+									<span class="blueprint-row-description">{blueprint.description}</span>
+								</span>
+								<span class="blueprint-row-side">
+									<span class="blueprint-row-port mono">{blueprint.expose ? 'public' : `${blueprint.port}/tcp`}</span>
+									<span class="blueprint-row-action">Configure</span>
+								</span>
+							</button>
+						</li>
+					{/each}
+				</ul>
+			</section>
+		{:else}
+			<p class="panel mt-5 px-5 py-10 text-center text-muted">
+				{#if blueprints.length === 0}
+					No blueprints yet. They are downloaded from the blueprint catalog; use Refresh to try again.
+				{:else}
+					No blueprints match “{query}”.
+				{/if}
+			</p>
+		{/each}
 	{/if}

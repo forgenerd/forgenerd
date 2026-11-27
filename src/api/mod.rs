@@ -47,6 +47,8 @@ pub struct AppState {
     pub container_locks: Arc<KeyedLocks>,
     pub timing: DeployTiming,
     pub login_throttle: Arc<LoginThrottle>,
+    /// One-click app blueprints, downloaded from the blueprints catalog.
+    pub catalog: Arc<crate::blueprints::Catalog>,
 }
 
 impl AppState {
@@ -68,6 +70,7 @@ impl AppState {
             container_locks: Arc::default(),
             timing: DeployTiming::default(),
             login_throttle: Arc::default(),
+            catalog: Arc::default(),
         }
     }
 }

@@ -278,6 +278,8 @@ async fn run_server() -> Result<()> {
             tracing::error!(error = %err, "initial proxy sync failed");
         }
     }
+    state.catalog.load_cached(&config.data_dir).await;
+    forgenerd::blueprints::spawn_refresher(state.clone());
     reconciler::spawn(state.clone());
     forgenerd::backup::spawn_scheduler(state.clone());
     forgenerd::maintenance::spawn_scheduler(state.clone());

@@ -1,0 +1,145 @@
+{
+ "schema": 1,
+ "blueprints": [
+  {
+   "id": "postgres",
+   "name": "PostgreSQL",
+   "category": "Databases",
+   "description": "PostgreSQL 18 with a persistent volume. Other apps connect at <app-name>:5432.",
+   "service": "postgres",
+   "port": 5432,
+   "image": "postgres",
+   "image_tag": "18-alpine",
+   "env": {
+    "POSTGRES_USER": {
+     "value": "app",
+     "description": "PostgreSQL application user",
+     "secret": false
+    },
+    "POSTGRES_DB": {
+     "value": "app",
+     "description": "PostgreSQL application database",
+     "secret": false
+    },
+    "POSTGRES_PASSWORD": {
+     "description": "Password for the PostgreSQL application user",
+     "generate": true
+    }
+   },
+   "connection": "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@{host}:5432/${POSTGRES_DB}",
+   "compose": "services:\n  postgres:\n    image: postgres:${IMAGE_TAG}\n    environment:\n      POSTGRES_USER: ${POSTGRES_USER}\n      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}\n      POSTGRES_DB: ${POSTGRES_DB}\n    volumes:\n      - data:/var/lib/postgresql\n    healthcheck:\n      test: [\"CMD-SHELL\", \"pg_isready -U \\\"$${POSTGRES_USER}\\\" -d \\\"$${POSTGRES_DB}\\\"\"]\n      interval: 5s\n      timeout: 3s\n      retries: 20\nvolumes:\n  data:\n"
+  },
+  {
+   "id": "mysql",
+   "name": "MySQL",
+   "category": "Databases",
+   "description": "MySQL 8.4 LTS with a persistent volume. Other apps connect at <app-name>:3306.",
+   "service": "mysql",
+   "port": 3306,
+   "image": "mysql",
+   "image_tag": "8.4",
+   "env": {
+    "MYSQL_USER": {
+     "value": "app",
+     "description": "Application database user",
+     "secret": false
+    },
+    "MYSQL_DATABASE": {
+     "value": "app",
+     "description": "Application database name",
+     "secret": false
+    },
+    "MYSQL_PASSWORD": {
+     "description": "Password for the application user",
+     "generate": true
+    },
+    "MYSQL_ROOT_PASSWORD": {
+     "description": "Password for the MySQL root account",
+     "generate": true
+    }
+   },
+   "connection": "mysql://${MYSQL_USER}:${MYSQL_PASSWORD}@{host}:3306/${MYSQL_DATABASE}",
+   "compose": "services:\n  mysql:\n    image: mysql:${IMAGE_TAG}\n    environment:\n      MYSQL_USER: ${MYSQL_USER}\n      MYSQL_PASSWORD: ${MYSQL_PASSWORD}\n      MYSQL_DATABASE: ${MYSQL_DATABASE}\n      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}\n    volumes:\n      - data:/var/lib/mysql\n    healthcheck:\n      test: [\"CMD-SHELL\", \"MYSQL_PWD=\\\"$${MYSQL_ROOT_PASSWORD}\\\" mysqladmin ping -h 127.0.0.1 -uroot --silent\"]\n      interval: 5s\n      timeout: 3s\n      retries: 30\n      start_period: 20s\nvolumes:\n  data:\n"
+  },
+  {
+   "id": "redis",
+   "name": "Redis",
+   "category": "Databases",
+   "description": "Redis 7 with append-only persistence and a password. Other apps connect at <app-name>:6379.",
+   "service": "redis",
+   "port": 6379,
+   "image": "redis",
+   "image_tag": "7-alpine",
+   "env": {
+    "REDIS_PASSWORD": {
+     "description": "Password required by Redis clients",
+     "generate": true
+    }
+   },
+   "connection": "redis://default:${REDIS_PASSWORD}@{host}:6379",
+   "compose": "services:\n  redis:\n    image: redis:${IMAGE_TAG}\n    command: [\"redis-server\", \"--requirepass\", \"${REDIS_PASSWORD}\", \"--appendonly\", \"yes\"]\n    environment:\n      REDISCLI_AUTH: ${REDIS_PASSWORD}\n    volumes:\n      - data:/data\n    healthcheck:\n      test: [\"CMD\", \"redis-cli\", \"ping\"]\n      interval: 5s\n      timeout: 3s\n      retries: 20\nvolumes:\n  data:\n"
+  },
+  {
+   "id": "n8n",
+   "name": "n8n",
+   "category": "Automation",
+   "description": "n8n workflow automation with webhooks served on the app's domain. Create the owner account on first visit.",
+   "service": "n8n",
+   "port": 5678,
+   "expose": true,
+   "image": "n8nio/n8n",
+   "image_tag": "2.50.3",
+   "env": {
+    "N8N_URL": {
+     "value": "{url}",
+     "description": "Public URL of the editor and webhooks",
+     "secret": false
+    },
+    "N8N_ENCRYPTION_KEY": {
+     "description": "Encrypts saved credentials; keep it to restore a backup",
+     "generate": true
+    },
+    "GENERIC_TIMEZONE": {
+     "value": "UTC",
+     "description": "Timezone for schedules",
+     "secret": false
+    }
+   },
+   "compose": "services:\n  n8n:\n    image: n8nio/n8n:${IMAGE_TAG}\n    environment:\n      N8N_EDITOR_BASE_URL: ${N8N_URL}\n      N8N_WEBHOOK_URL: ${N8N_URL}\n      N8N_PROXY_HOPS: \"1\"\n      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}\n      GENERIC_TIMEZONE: ${GENERIC_TIMEZONE}\n      TZ: ${GENERIC_TIMEZONE}\n    volumes:\n      - data:/home/node/.n8n\nvolumes:\n  data:\n"
+  },
+  {
+   "id": "mongo-express",
+   "name": "Mongo Express",
+   "category": "Admin tools",
+   "description": "Mongo Express for browsing MongoDB, behind its own sign-in. Paste the MongoDB connection string shown when you created the database.",
+   "service": "mongo-express",
+   "port": 8081,
+   "expose": true,
+   "image": "mongo-express",
+   "image_tag": "1",
+   "env": {
+    "MONGO_URL": {
+     "description": "MongoDB connection string, e.g. mongodb://admin:<password>@mongodb:27017/?authSource=admin"
+    },
+    "ME_CONFIG_BASICAUTH_USERNAME": {
+     "value": "admin",
+     "description": "User you sign in with",
+     "secret": false
+    },
+    "ME_CONFIG_BASICAUTH_PASSWORD": {
+     "description": "Password you sign in with",
+     "generate": true
+    },
+    "ME_CONFIG_SITE_COOKIESECRET": {
+     "description": "Signs cookies",
+     "generate": true
+    },
+    "ME_CONFIG_SITE_SESSIONSECRET": {
+     "description": "Signs sessions",
+     "generate": true
+    }
+   },
+   "compose": "services:\n  mongo-express:\n    image: mongo-express:${IMAGE_TAG}\n    environment:\n      ME_CONFIG_MONGODB_URL: ${MONGO_URL}\n      # Without this, Mongo Express serves the database to anyone who finds the URL.\n      ME_CONFIG_BASICAUTH_ENABLED: \"true\"\n      ME_CONFIG_BASICAUTH_USERNAME: ${ME_CONFIG_BASICAUTH_USERNAME}\n      ME_CONFIG_BASICAUTH_PASSWORD: ${ME_CONFIG_BASICAUTH_PASSWORD}\n      ME_CONFIG_SITE_COOKIESECRET: ${ME_CONFIG_SITE_COOKIESECRET}\n      ME_CONFIG_SITE_SESSIONSECRET: ${ME_CONFIG_SITE_SESSIONSECRET}\n"
+  }
+ ]
+}

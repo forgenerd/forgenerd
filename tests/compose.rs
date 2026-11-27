@@ -438,14 +438,15 @@ async fn blueprints_create_and_deploy_databases() {
     let auth = t.admin().await;
     let pid = project(&t, &auth).await;
 
-    let list = t.get("/api/v1/blueprints", Some(&auth)).await.json();
+    let list = t.get("/api/v1/blueprints", Some(&auth)).await.json()["blueprints"].clone();
     let ids: Vec<&str> = list
         .as_array()
         .unwrap()
         .iter()
         .map(|t| t["id"].as_str().unwrap())
         .collect();
-    assert_eq!(ids, vec!["postgres", "redis", "mysql"]);
+    // Sorted by category (Databases, Automation, Admin tools), then by name.
+    assert_eq!(ids, ["mysql", "postgres", "redis", "n8n", "mongo-express"]);
     let postgres = list
         .as_array()
         .unwrap()
@@ -649,4 +650,88 @@ async fn reconciler_watches_whole_compose_stacks() {
     ];
     assert_eq!(reconciler::remove_orphans(&t.state).await.unwrap(), 1);
     assert_eq!(t.fake.removed(), vec!["stale".to_string()]);
+}
+
+#[tokio::test]
+async fn web_app_blueprints_are_public_and_get_their_url() {
+    let t = test_app().await;
+    let auth = t.admin().await;
+    let pid = project(&t, &auth).await;
+    let set = t
+        .patch(
+            "/api/v1/settings",
+            json!({"root_domain": "example.com"}),
+            &auth,
+        )
+        .await;
+    assert_eq!(set.status, StatusCode::OK, "{}", set.text());
+
+    let list = t.get("/api/v1/blueprints", Some(&auth)).await.json()["blueprints"].clone();
+    let n8n = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|b| b["id"] == "n8n")
+        .unwrap();
+    assert_eq!(n8n["category"], "Automation");
+    assert_eq!(n8n["expose"], true);
+    let url_param = n8n["parameters"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["key"] == "N8N_URL")
+        .unwrap();
+    assert_eq!(url_param["public_url"], true);
+    assert!(
+        url_param["default_value"].is_null(),
+        "the placeholder is not shown"
+    );
+
+    let res = t
+        .post(
+            "/api/v1/blueprints/n8n/deploy",
+            json!({"project_id": pid, "name": "flows"}),
+            Some(&auth),
+        )
+        .await;
+    assert_eq!(res.status, StatusCode::ACCEPTED, "{}", res.text());
+    let body = res.json();
+    assert_eq!(body["app"]["exposed"], true);
+    assert_eq!(body["url"], "https://flows.example.com");
+    assert!(body["connection_string"].is_null());
+    let generated = body["generated"].as_array().unwrap();
+    assert_eq!(generated.len(), 1);
+    assert_eq!(generated[0]["key"], "N8N_ENCRYPTION_KEY");
+    let key = generated[0]["value"].as_str().unwrap().to_string();
+    t.wait_deployment(body["deployment_id"].as_str().unwrap(), &auth)
+        .await;
+    let spec = t.fake.composes.lock().unwrap().last().unwrap().clone();
+    assert_eq!(
+        spec.env.get("N8N_URL").map(String::as_str),
+        Some("https://flows.example.com")
+    );
+    assert_eq!(spec.env.get("N8N_ENCRYPTION_KEY"), Some(&key));
+
+    // A parameter with no default must be supplied.
+    let missing = t
+        .post(
+            "/api/v1/blueprints/mongo-express/deploy",
+            json!({"project_id": pid, "name": "mongo-ui"}),
+            Some(&auth),
+        )
+        .await;
+    assert_eq!(missing.status, StatusCode::BAD_REQUEST);
+    assert!(
+        missing.text().contains("MONGO_URL is required"),
+        "{}",
+        missing.text()
+    );
+    let ok = t
+        .post(
+            "/api/v1/blueprints/mongo-express/deploy",
+            json!({"project_id": pid, "name": "mongo-ui", "env": {"MONGO_URL": "mongodb://admin:pw@mongodb:27017/"}}),
+            Some(&auth),
+        )
+        .await;
+    assert_eq!(ok.status, StatusCode::ACCEPTED, "{}", ok.text());
 }

@@ -72,11 +72,30 @@
 	background: #fff;
 }
 
-.blueprint-row-logo img {
+/* Logo tile in rows and in the dialog header; blueprints without a logo get initials. */
+.blueprint-logo {
+	display: grid;
+	flex-shrink: 0;
+	place-items: center;
+	padding: 0.5rem;
+	border: 1px solid var(--line);
+	border-radius: 6px;
+	background: #fff;
+}
+
+.blueprint-logo img {
 	display: block;
 	max-width: 100%;
 	max-height: 100%;
 	object-fit: contain;
+}
+
+.blueprint-logo.is-initials {
+	background: var(--raised);
+	color: var(--text);
+	font-size: 1.15rem;
+	font-weight: 600;
+	letter-spacing: -0.02em;
 }
 
 .blueprint-row-content {

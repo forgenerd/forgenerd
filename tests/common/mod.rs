@@ -263,6 +263,11 @@ pub async fn test_app() -> TestApp {
         registry,
         dir.path().to_path_buf(),
     );
+    // A few real blueprints from forgenerd/blueprints, so tests never touch the network.
+    state
+        .catalog
+        .load(include_str!("../fixtures/catalog.json"), chrono::Utc::now())
+        .unwrap();
     state.timing = DeployTiming {
         health_timeout: Duration::from_millis(100),
         drain: Duration::ZERO,

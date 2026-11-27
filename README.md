@@ -26,7 +26,7 @@ account to sign up for and no cloud service in the loop.
 | **Deploy** | A Docker image, a git repository (Dockerfile or Railpack) or a Compose stack, with push-to-deploy webhooks from GitHub, Gitea and GitLab |
 | **Zero downtime** | New versions must pass a health check before taking traffic, and previous images are kept for one-click rollback |
 | **Networking** | Automatic HTTPS for custom domains and `<app>.<your-domain>`, plus a private network where apps reach each other by name |
-| **Databases** | One-click Postgres, MySQL and Redis |
+| **Blueprints** | One-click databases and apps (Postgres, Redis, n8n, Uptime Kuma, WordPress and more) from the [blueprints catalog](https://github.com/forgenerd/blueprints), updated without a forgenerd release |
 | **Backups** | Scheduled backups to S3 (AWS, Cloudflare R2, Backblaze B2, MinIO) with retention and one-click restore, including the panel itself |
 | **Self-healing** | Crashed or unresponsive apps are restarted, with alerts on Discord, Slack, Telegram or any webhook |
 | **Security** | Secrets encrypted at rest, a strict Compose policy, no host ports published by apps and rate-limited logins |
