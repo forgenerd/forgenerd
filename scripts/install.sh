@@ -30,7 +30,7 @@ PANEL_PORT=4367
 TOTAL_STEPS=7
 
 # ---------------------------------------------------------------- terminal UI
-# Colors and the spinner only on an interactive terminal (and never with NO_COLOR);
+# Colors only on an interactive terminal (and never with NO_COLOR);
 # Unicode glyphs only when the locale is UTF-8. Piped output stays plain, readable text.
 UI_TTY=0
 if [ -t 1 ] && [ "${TERM:-dumb}" != "dumb" ]; then UI_TTY=1; fi
@@ -56,11 +56,9 @@ fi
 if [ "$UTF8" -eq 1 ]; then
 	G_TEE="├" G_END="└" G_OK="✓" G_FAIL="✕" G_DOT="·" G_ARROW="→"
 	B_TL="╭" B_TR="╮" B_BL="╰" B_BR="╯" B_H="─" B_V="│"
-	SPIN_FRAMES=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
 else
 	G_TEE="|-" G_END="\`-" G_OK="+" G_FAIL="x" G_DOT="-" G_ARROW="->"
 	B_TL="+" B_TR="+" B_BL="+" B_BR="+" B_H="-" B_V="|"
-	SPIN_FRAMES=('|' '/' '-' '\')
 fi
 
 INDENT="        "   # aligns details under a step title ("  [1/7] ")
@@ -69,7 +67,6 @@ STEP_TITLE=""
 STEP_ACTIVE=0
 STEP_SUMMARY=""
 STEP_STARTED=0
-SPINNER_PID=""
 
 now_ms() {
 	if [ -n "${EPOCHREALTIME:-}" ]; then
@@ -89,42 +86,9 @@ fmt_ms() {
 }
 STARTED_AT=$(now_ms)
 
-spinner_start() {
-	[ "$UI_TTY" -eq 1 ] || return 0
-	[ "$STEP_ACTIVE" -eq 1 ] || return 0
-	[ -z "$SPINNER_PID" ] || return 0
-	(
-		local i=0
-		trap 'exit 0' TERM INT
-		while :; do
-			printf '\r\033[2K%s%s%s%s %s%s' "$INDENT" "$ACCENT" "${SPIN_FRAMES[$i]}" "$RESET" "$DIM" "working$RESET"
-			i=$(((i + 1) % ${#SPIN_FRAMES[@]}))
-			sleep 0.08
-		done
-	) &
-	SPINNER_PID=$!
-	# Not a job: some bash versions (5.2) reap it early and then warn
-	# "wait_for: No record of process" on a later wait.
-	disown "$SPINNER_PID" 2>/dev/null || true
-}
-spinner_stop() {
-	if [ -n "$SPINNER_PID" ]; then
-		kill "$SPINNER_PID" 2>/dev/null || true
-		# Let it exit before clearing the line, so no frame lands after the clear.
-		local _
-		for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
-			kill -0 "$SPINNER_PID" 2>/dev/null || break
-			sleep 0.01
-		done
-		SPINNER_PID=""
-		printf '\r\033[2K'
-	fi
-}
-
 # Close the current step: "└ ✓ summary" with the step's elapsed time right-aligned.
 step_done() {
 	[ "$STEP_ACTIVE" -eq 1 ] || return 0
-	spinner_stop
 	local text="${STEP_SUMMARY:-done}" took pad
 	took=$(fmt_ms $(($(now_ms) - STEP_STARTED)))
 	pad=$((56 - ${#text}))
@@ -141,23 +105,17 @@ step() {
 	STEP_ACTIVE=1
 	STEP_STARTED=$(now_ms)
 	printf '  %s%s[%d/%d]%s %s%s%s\n' "$ACCENT" "$BOLD" "$STEP" "$TOTAL_STEPS" "$RESET" "$BOLD" "$STEP_TITLE" "$RESET"
-	spinner_start
 }
 # A detail line nested under the current step.
 detail() {
-	spinner_stop
 	printf '%s%s%s%s %s\n' "$INDENT" "$DIM" "$G_TEE" "$RESET" "$*"
-	spinner_start
 }
 # What the current step achieved, shown on its closing line.
 result() { STEP_SUMMARY="$*"; }
 warn() {
-	spinner_stop
 	printf '%s%s%s%s %s!%s %s\n' "$INDENT" "$DIM" "$G_TEE" "$RESET" "$YELLOW" "$RESET" "$*" >&2
-	spinner_start
 }
 die() {
-	spinner_stop
 	if [ "$STEP_ACTIVE" -eq 1 ]; then
 		printf '%s%s%s%s %s%s %s%s\n' "$INDENT" "$DIM" "$G_END" "$RESET" "$RED" "$G_FAIL" "$*" "$RESET" >&2
 	else
@@ -169,11 +127,7 @@ run() {
 	if [ "$DRY_RUN" -eq 1 ]; then
 		detail "$DIM\$ $*$RESET"
 	else
-		spinner_stop
 		"$@"
-		local status=$?
-		spinner_start
-		return "$status"
 	fi
 }
 
@@ -310,7 +264,6 @@ USAGE
 }
 
 cleanup() {
-	spinner_stop
 	if [ -n "${tmp:-}" ] && [ -d "$tmp" ]; then rm -rf -- "$tmp"; fi
 }
 trap cleanup EXIT
@@ -594,7 +547,6 @@ if [ "$UPGRADE" -eq 1 ]; then
 	echo
 	exit 0
 fi
-spinner_stop
 token=""
 for _ in $(seq 20); do
 	token=$(journalctl -u forgenerd --no-pager -n 100 2>/dev/null | grep -A3 'setup token' | grep -oE '[A-Za-z0-9_-]{40,}' | tail -1 || true)
