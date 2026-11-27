@@ -17,15 +17,23 @@ curl -fsSL https://raw.githubusercontent.com/forgenerd/forgenerd/main/scripts/in
 The installer creates a `forgenerd` system user, puts the binary in `/usr/local/bin`,
 keeps data in `/var/lib/forgenerd` and starts the `forgenerd` systemd service. On small
 machines it also adds a swapfile (skip with `--no-swap`). Run it with `--help` for every
-option.
+option. New installs expose the panel on port 4367 so you can open it without an SSH
+tunnel; use `--private-panel` if you want the panel reachable only through localhost.
+Upgrades preserve the current panel exposure. Use `--dry-run` to preview the planned
+changes without requiring Docker or modifying the host.
 
 When it finishes it prints a one-time setup token. You can also find it with
 `journalctl -u forgenerd`.
 
 ### Open the panel
 
-The panel listens on `127.0.0.1:4367` and is not reachable from the internet. Open an
-SSH tunnel from your machine:
+By default, the panel listens on `0.0.0.0:4367`. Open it at
+`http://<server-ip>:4367` after allowing inbound TCP 4367 in your cloud provider's
+firewall. This is plain HTTP; once the panel domain serves HTTPS, rerun the installer
+with `--private-panel` and close the public port.
+
+For a private install, pass `--private-panel` to the installer. The panel then listens
+on `127.0.0.1:4367`; open an SSH tunnel from your machine:
 
 ```sh
 ssh -L 4367:127.0.0.1:4367 you@your-server
@@ -115,7 +123,7 @@ It reads the new password from standard input and signs out every session.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `FORGENERD_DATA_DIR` | `/var/lib/forgenerd` | Database, master key, build and backup scratch space |
-| `FORGENERD_LISTEN` | `127.0.0.1:4367` | Panel address. `0.0.0.0:4367` makes it public over plain HTTP |
+| `FORGENERD_LISTEN` | `127.0.0.1:4367` | Binary default. The installer uses `0.0.0.0:4367` for new installs unless `--private-panel` is passed |
 | `FORGENERD_MASTER_KEY` | read from `master.key` | Base64 32-byte key that encrypts secrets |
 | `FORGENERD_REPO` | `forgenerd/forgenerd` | GitHub `owner/name` that updates are installed from and checked against |
 | `RUST_LOG` | `info` | Log level |
