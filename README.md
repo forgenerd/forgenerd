@@ -39,7 +39,7 @@ account to sign up for and no cloud service in the loop.
 Install forgenerd on a Linux server (x86_64 or arm64) with Docker:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/forgenerd/forgenerd/main/scripts/install.sh | sudo bash
+curl -fsSL https://get.forgenerd.com | sudo bash
 ```
 
 Then follow the guide:
