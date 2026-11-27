@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/forgenerd/forgenerd/compare/v0.3.0...v0.4.0) (2026-11-27)
+
+
+### Features
+
+* show blueprint credentials on deployed app page ([#3](https://github.com/forgenerd/forgenerd/issues/3)) ([86cade8](https://github.com/forgenerd/forgenerd/commit/86cade8db44b6d5d2e773da00c5fb2cf96a99a6d))
+
 ## [0.3.0](https://github.com/forgenerd/forgenerd/compare/v0.2.1...v0.3.0) (2026-11-27)
 
 
