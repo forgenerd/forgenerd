@@ -1,9 +1,9 @@
 <script lang="ts">
 	import Icon from '#lib/components/Icon.svelte';
+	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
 	import { get, post, errorMessage, type Blueprint, type BlueprintDeployed, type BlueprintList, type Project } from '#lib/api.ts';
 	import { ago } from '#lib/format.ts';
-	import Copy from '#lib/components/Copy.svelte';
 	import Skeleton from '#lib/components/Skeleton.svelte';
 	import './blueprints.css';
 
@@ -39,9 +39,6 @@
 			refreshing = false;
 		}
 	}
-	let result = $state<(BlueprintDeployed & { blueprint: Blueprint }) | null>(null);
-	const resultHasSecrets = $derived(!!result && (!!result.connection_string || result.generated.length > 0));
-
 	$effect(() => {
 		if (!dialog) return;
 		if (selected && !dialog.open) dialog.showModal();
@@ -119,8 +116,8 @@
 				image_tag: imageTag.trim(),
 				env: values
 			});
-			result = { ...r, blueprint };
 			selected = null;
+			await goto(`/apps/${r.app.id}`, { state: { blueprintDeployment: r } });
 		} catch (err) {
 			error = errorMessage(err);
 		} finally {
@@ -240,48 +237,6 @@
 		</p>
 	{/if}
 
-	{#if result}
-		<section class="mt-5 rounded-lg border p-5 {resultHasSecrets ? 'border-warn/40 bg-warn-soft' : 'border-ok/40 bg-ok-soft'}" aria-live="polite">
-			{#if resultHasSecrets}
-				<h2 class="flex items-center gap-2 text-[14px] font-semibold"><Icon name="warning" size={19} class="text-warn" /> Save these now</h2>
-				<p class="mt-1 text-[13px] text-muted">
-					Shown once: secrets are stored encrypted and never displayed again. Deploying as <a class="link" href="/apps/{result.app.id}">{result.app.name}</a>.
-				</p>
-			{:else}
-				<h2 class="flex items-center gap-2 text-[14px] font-semibold"><Icon name="check_circle" size={19} class="text-ok" filled /> Deploying {result.blueprint.name}</h2>
-				<p class="mt-1 text-[13px] text-muted">Follow it on <a class="link" href="/apps/{result.app.id}">{result.app.name}</a>.</p>
-			{/if}
-			<dl class="mt-3 grid gap-2 text-[13px]">
-				{#if result.url}
-					<div>
-						<dt class="label">Address</dt>
-						<dd><a class="link inline-flex items-center gap-1" href={result.url} target="_blank" rel="noopener noreferrer">{result.url} <Icon name="open_in_new" size={15} /></a></dd>
-					</div>
-				{:else if result.blueprint.expose}
-					<p class="text-muted">Set a root domain in <a class="link" href="/settings">Settings</a>, or add a domain on the app's Domains tab, to open it.</p>
-				{/if}
-				{#if result.connection_string}
-					<div>
-						<dt class="label">Connection string</dt>
-						<dd class="flex items-center gap-1">
-							<code class="input flex items-center overflow-x-auto bg-surface whitespace-nowrap">{result.connection_string}</code>
-							<Copy value={result.connection_string} label="Copy connection string" />
-						</dd>
-					</div>
-				{/if}
-				{#each result.generated as item (item.key)}
-					<div>
-						<dt class="label">{parameterLabel(item.key)}</dt>
-						<dd class="flex items-center gap-1">
-							<code class="input flex items-center overflow-x-auto bg-surface whitespace-nowrap">{item.value}</code>
-							<Copy value={item.value} label="Copy {parameterLabel(item.key)}" />
-						</dd>
-					</div>
-				{/each}
-			</dl>
-			<button class="btn btn-sm mt-3" onclick={() => (result = null)}>{resultHasSecrets ? "I've saved them" : 'Close'}</button>
-		</section>
-	{/if}
 	{#if error}
 		<p role="alert" class="mt-5 rounded-md bg-bad-soft px-3 py-2 text-[13px] text-bad">{error}</p>
 	{:else if !loaded}

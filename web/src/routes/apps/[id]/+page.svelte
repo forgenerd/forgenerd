@@ -2,7 +2,7 @@
 	import Icon from '#lib/components/Icon.svelte';
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
-	import { get, post, del, errorMessage, ApiError, type AppDetail } from '#lib/api.ts';
+	import { get, post, del, errorMessage, ApiError, type AppDetail, type BlueprintDeployed } from '#lib/api.ts';
 	import { notify } from '#lib/toast.svelte.ts';
 	import { internalAddress } from '#lib/types-board.ts';
 	import { ago } from '#lib/format.ts';
@@ -32,6 +32,17 @@
 	let notFound = $state(false);
 	let busy = $state('');
 	let configKey = $state(0);
+	let routeAppId = '';
+	let blueprintDeployment = $state<BlueprintDeployed | null>(null);
+	const blueprintDeploymentHasSecrets = $derived(!!blueprintDeployment && (!!blueprintDeployment.connection_string || blueprintDeployment.generated.length > 0));
+
+	function parameterLabel(key: string) {
+		return key
+			.toLowerCase()
+			.split('_')
+			.map((word) => (word === 'mysql' ? 'MySQL' : word === 'postgres' ? 'PostgreSQL' : word === 'redis' ? 'Redis' : word.charAt(0).toUpperCase() + word.slice(1)))
+			.join(' ');
+	}
 
 	async function load() {
 		try {
@@ -44,9 +55,15 @@
 	}
 
 	$effect(() => {
-		id;
+		if (routeAppId === id) return;
+		routeAppId = id;
 		app = null;
 		notFound = false;
+		const deployment = page.state.blueprintDeployment ?? null;
+		blueprintDeployment = deployment;
+		if (deployment) {
+			void goto(page.url.toString(), { replace: true, shallow: true, reset: false, state: {} });
+		}
 		load();
 	});
 	// Poll faster while a deployment is in flight.
@@ -94,6 +111,10 @@
 	const internal = $derived(app ? internalAddress(app) : null);
 	const latest = $derived(app?.deployments[0]);
 	const lastFailed = $derived(!!latest && latest.status === 'failed' && !!app?.active_deployment_id);
+
+	function dismissBlueprintDeployment() {
+		blueprintDeployment = null;
+	}
 </script>
 
 <a href="/" class="inline-flex items-center gap-1.5 text-[13px] text-muted hover:text-text"><Icon name="arrow_back" size={17} /> Apps</a>
@@ -153,6 +174,47 @@
 			<span class="text-muted">Previous version still live.</span>
 			{#if tab !== 'deployments'}<a class="link" href="?tab=deployments" data-sveltekit-replacestate>See the build log</a>{/if}
 		</p>
+	{/if}
+
+	{#if blueprintDeployment}
+		<section class="mt-5 rounded-lg border p-5 {blueprintDeploymentHasSecrets ? 'border-warn/40 bg-warn-soft' : 'border-ok/40 bg-ok-soft'}" aria-live="polite">
+			{#if blueprintDeploymentHasSecrets}
+				<h2 class="flex items-center gap-2 text-[14px] font-semibold"><Icon name="warning" size={19} class="text-warn" /> Save these now</h2>
+				<p class="mt-1 text-[13px] text-muted">Shown once: secrets are stored encrypted and never displayed again. Deploying as <span class="text-text">{app.name}</span>.</p>
+			{:else}
+				<h2 class="flex items-center gap-2 text-[14px] font-semibold"><Icon name="check_circle" size={19} class="text-ok" filled /> Deployment queued</h2>
+				<p class="mt-1 text-[13px] text-muted">Follow the deployment below for <span class="text-text">{app.name}</span>.</p>
+			{/if}
+			<dl class="mt-3 grid gap-2 text-[13px]">
+				{#if blueprintDeployment.url}
+					<div>
+						<dt class="label">Address</dt>
+						<dd><a class="link inline-flex items-center gap-1" href={blueprintDeployment.url} target="_blank" rel="noopener noreferrer">{blueprintDeployment.url} <Icon name="open_in_new" size={15} /></a></dd>
+					</div>
+				{:else if app.exposed}
+					<p class="text-muted">Set a root domain in <a class="link" href="/settings">Settings</a>, or add a domain on the app's Domains tab, to open it.</p>
+				{/if}
+				{#if blueprintDeployment.connection_string}
+					<div>
+						<dt class="label">Connection string</dt>
+						<dd class="flex items-center gap-1">
+							<code class="input flex items-center overflow-x-auto bg-surface whitespace-nowrap">{blueprintDeployment.connection_string}</code>
+							<Copy value={blueprintDeployment.connection_string} label="Copy connection string" />
+						</dd>
+					</div>
+				{/if}
+				{#each blueprintDeployment.generated as item (item.key)}
+					<div>
+						<dt class="label">{parameterLabel(item.key)}</dt>
+						<dd class="flex items-center gap-1">
+							<code class="input flex items-center overflow-x-auto bg-surface whitespace-nowrap">{item.value}</code>
+							<Copy value={item.value} label="Copy {parameterLabel(item.key)}" />
+						</dd>
+					</div>
+				{/each}
+			</dl>
+			<button class="btn btn-sm mt-3" onclick={dismissBlueprintDeployment}>{blueprintDeploymentHasSecrets ? "I've saved them" : 'Close'}</button>
+		</section>
 	{/if}
 
 	<nav class="mt-6 flex overflow-x-auto overflow-y-hidden border-b border-line" aria-label="App sections">
