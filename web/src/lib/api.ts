@@ -281,6 +281,18 @@ export interface UpdateStatus {
 	/** GitHub owner/name releases come from (forgenerd/forgenerd unless overridden). */
 	repo: string;
 	release_url: string;
+	/** The installer set up the updater, so the panel can install `latest` itself. */
+	self_update: boolean;
+}
+
+export interface UpdateProgress {
+	state: 'idle' | 'pending' | 'running' | 'succeeded' | 'failed';
+	/** Release tag being (or last) installed, e.g. v0.2.0. */
+	version: string | null;
+	/** Version of the panel that answered. */
+	current: string;
+	/** End of the updater's output; only set when the update failed. */
+	log: string;
 }
 
 export interface CleanupConfig {

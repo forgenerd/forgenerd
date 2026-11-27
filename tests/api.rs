@@ -310,3 +310,123 @@ async fn disk_usage_is_reported() {
         StatusCode::UNAUTHORIZED
     );
 }
+
+#[tokio::test]
+async fn panel_update_requests_go_through_the_updater_files() {
+    let t = test_app().await;
+    let auth = t.admin().await;
+    let dir = t.state.data_dir.join("update");
+    let install = |version: &str| json!({ "version": version });
+
+    let anonymous = t
+        .post(
+            "/api/v1/maintenance/updates/install",
+            install("99.0.0"),
+            None,
+        )
+        .await;
+    assert_eq!(anonymous.status, StatusCode::UNAUTHORIZED);
+
+    // Installs from before the updater existed have no update directory.
+    let res = t
+        .post(
+            "/api/v1/maintenance/updates/install",
+            install("99.0.0"),
+            Some(&auth),
+        )
+        .await;
+    assert_eq!(res.status, StatusCode::CONFLICT);
+    std::fs::create_dir(&dir).unwrap();
+
+    let idle = t
+        .get("/api/v1/maintenance/updates/progress", Some(&auth))
+        .await;
+    assert_eq!(idle.json()["state"], "idle");
+
+    for bad in [
+        "",
+        "latest",
+        "1.0;rm -rf /",
+        "v0.0.1",
+        forgenerd::maintenance::VERSION,
+    ] {
+        let res = t
+            .post(
+                "/api/v1/maintenance/updates/install",
+                install(bad),
+                Some(&auth),
+            )
+            .await;
+        assert_eq!(res.status, StatusCode::BAD_REQUEST, "{bad:?}");
+    }
+    assert!(!dir.join("request").exists());
+
+    let res = t
+        .post(
+            "/api/v1/maintenance/updates/install",
+            install("99.0.0"),
+            Some(&auth),
+        )
+        .await;
+    assert_eq!(res.status, StatusCode::ACCEPTED);
+    assert_eq!(res.json()["state"], "pending");
+    assert_eq!(res.json()["version"], "v99.0.0");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("request")).unwrap(),
+        "v99.0.0\n"
+    );
+    assert!(!dir.join("request.tmp").exists());
+
+    let again = t
+        .post(
+            "/api/v1/maintenance/updates/install",
+            install("v99.0.0"),
+            Some(&auth),
+        )
+        .await;
+    assert_eq!(again.status, StatusCode::CONFLICT);
+
+    // The updater takes the request, then records the outcome.
+    std::fs::remove_file(dir.join("request")).unwrap();
+    let running = t
+        .get("/api/v1/maintenance/updates/progress", Some(&auth))
+        .await;
+    assert_eq!(running.json()["state"], "running");
+    let busy = t
+        .post(
+            "/api/v1/maintenance/updates/install",
+            install("99.0.0"),
+            Some(&auth),
+        )
+        .await;
+    assert_eq!(busy.status, StatusCode::CONFLICT);
+
+    std::fs::write(dir.join("log"), "downloading\nchecksum mismatch\n").unwrap();
+    std::fs::write(dir.join("result"), "failed v99.0.0\n").unwrap();
+    let failed = t
+        .get("/api/v1/maintenance/updates/progress", Some(&auth))
+        .await
+        .json();
+    assert_eq!(failed["state"], "failed");
+    assert_eq!(failed["version"], "v99.0.0");
+    assert_eq!(failed["log"], "downloading\nchecksum mismatch");
+
+    // A failed update can be retried, which clears the old result.
+    let retry = t
+        .post(
+            "/api/v1/maintenance/updates/install",
+            install("99.0.0"),
+            Some(&auth),
+        )
+        .await;
+    assert_eq!(retry.status, StatusCode::ACCEPTED);
+    assert!(!dir.join("result").exists());
+    std::fs::remove_file(dir.join("request")).unwrap();
+    std::fs::write(dir.join("result"), "ok v99.0.0\n").unwrap();
+    let done = t
+        .get("/api/v1/maintenance/updates/progress", Some(&auth))
+        .await
+        .json();
+    assert_eq!(done["state"], "succeeded");
+    assert_eq!(done["log"], "");
+}

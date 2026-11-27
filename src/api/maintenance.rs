@@ -1,4 +1,5 @@
 use axum::extract::State;
+use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
@@ -7,12 +8,14 @@ use super::AppState;
 use crate::auth::AuthUser;
 use crate::error::{AppError, AppResult};
 use crate::executor::DiskUsage;
-use crate::maintenance::{self, CleanupConfig, CleanupReport, UpdateStatus};
+use crate::maintenance::{self, CleanupConfig, CleanupReport, UpdateProgress, UpdateStatus};
 use crate::panel_backup::{self, LastRun};
 
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/updates", get(check_updates))
+        .route("/updates/install", post(install_update))
+        .route("/updates/progress", get(update_progress))
         .route("/cleanup", get(show_cleanup).patch(update_cleanup))
         .route("/cleanup/run", post(run_cleanup))
         .route("/disk", get(disk_usage))
@@ -23,8 +26,36 @@ pub fn routes() -> Router<AppState> {
         .route("/panel-backup/run", post(run_panel_backup))
 }
 
-async fn check_updates(_: AuthUser) -> AppResult<Json<UpdateStatus>> {
-    Ok(Json(maintenance::check_for_updates().await?))
+async fn check_updates(
+    _: AuthUser,
+    State(state): State<AppState>,
+) -> AppResult<Json<UpdateStatus>> {
+    let mut status = maintenance::check_for_updates().await?;
+    status.self_update = maintenance::self_update_available(&state.data_dir);
+    Ok(Json(status))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InstallUpdate {
+    version: String,
+}
+
+/// Hands the request to the root-run updater; the panel restarts when it is done.
+async fn install_update(
+    _: AuthUser,
+    State(state): State<AppState>,
+    Json(req): Json<InstallUpdate>,
+) -> AppResult<(StatusCode, Json<UpdateProgress>)> {
+    let progress = maintenance::request_update(&state.data_dir, &req.version).await?;
+    Ok((StatusCode::ACCEPTED, Json(progress)))
+}
+
+async fn update_progress(
+    _: AuthUser,
+    State(state): State<AppState>,
+) -> AppResult<Json<UpdateProgress>> {
+    Ok(Json(maintenance::update_progress(&state.data_dir).await?))
 }
 
 async fn show_cleanup(

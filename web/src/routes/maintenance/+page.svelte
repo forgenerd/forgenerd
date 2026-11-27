@@ -1,6 +1,6 @@
 <script lang="ts">
 	import Icon from '#lib/components/Icon.svelte';
-	import { onMount } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import {
 		get,
 		post,
@@ -12,6 +12,7 @@
 		type PanelBackupConfig,
 		type PanelBackupRun,
 		type S3Target,
+		type UpdateProgress,
 		type UpdateStatus
 	} from '#lib/api.ts';
 	import { ago, bytes, dateTime, describeCron } from '#lib/format.ts';
@@ -43,6 +44,85 @@
 			checking = false;
 		}
 	}
+
+	// Updating from the panel: a root-run updater on the server installs the release and
+	// restarts the panel, so requests fail for a few seconds while it comes back.
+	const POLL_MS = 2000;
+	const STALL_MS = 60_000;
+	const GIVE_UP_MS = 10 * 60_000;
+	let phase = $state<'idle' | 'updating' | 'failed'>('idle');
+	let target = $state('');
+	let updateLog = $state('');
+	let failure = $state('');
+	let stalled = $state(false);
+	let requesting = $state(false);
+	let updateConfirmOpen = $state(false);
+	let startedAt = 0;
+	let pollTimer: ReturnType<typeof setTimeout> | null = null;
+	const bare = (tag: string) => tag.replace(/^v/, '');
+
+	async function installUpdate() {
+		if (!update) return;
+		requesting = true;
+		try {
+			const progress = await post<UpdateProgress>('/maintenance/updates/install', { version: update.latest });
+			follow(progress.version ?? `v${update.latest}`);
+		} catch (e) {
+			notify(errorMessage(e), 'bad');
+		} finally {
+			requesting = false;
+			updateConfirmOpen = false;
+		}
+	}
+
+	function follow(version: string) {
+		phase = 'updating';
+		target = version;
+		updateLog = '';
+		failure = '';
+		stalled = false;
+		startedAt = Date.now();
+		schedulePoll();
+	}
+
+	function schedulePoll() {
+		if (pollTimer) clearTimeout(pollTimer);
+		pollTimer = setTimeout(pollUpdate, POLL_MS);
+	}
+
+	async function pollUpdate() {
+		pollTimer = null;
+		if (phase !== 'updating') return;
+		const waited = Date.now() - startedAt;
+		try {
+			const progress = await get<UpdateProgress>('/maintenance/updates/progress');
+			if (progress.state === 'failed') {
+				phase = 'failed';
+				updateLog = progress.log;
+				failure = `The update to ${target} failed. Forgenerd is still running ${progress.current}.`;
+				return;
+			}
+			if (progress.state === 'succeeded' && bare(progress.current) === bare(target)) {
+				phase = 'idle';
+				notify(`Updated to ${target}.`);
+				await checkUpdates();
+				return;
+			}
+			stalled = progress.state === 'pending' && waited > STALL_MS;
+		} catch {
+			// Expected while the panel restarts with the new version.
+		}
+		if (waited > GIVE_UP_MS) {
+			phase = 'failed';
+			failure = `No result after 10 minutes. Check the updater on the server: journalctl -u forgenerd-update`;
+			return;
+		}
+		schedulePoll();
+	}
+
+	onDestroy(() => {
+		if (pollTimer) clearTimeout(pollTimer);
+	});
 
 	// Cleanup schedule
 	let loaded = $state(false);
@@ -122,6 +202,14 @@
 
 	onMount(async () => {
 		loadDisk();
+		// Pick up an update that is still running (e.g. after a reload).
+		get<UpdateProgress>('/maintenance/updates/progress')
+			.then((progress) => {
+				if (progress.state === 'pending' || progress.state === 'running') {
+					follow(progress.version ?? 'the new version');
+				}
+			})
+			.catch(() => {});
 		try {
 			const [config, backup, nextTargets] = await Promise.all([
 				get<CleanupConfig>('/maintenance/cleanup'),
@@ -196,21 +284,60 @@
 				{checking ? 'Checking…' : 'Check for updates'}
 			</button>
 		</div>
-		{#if updateError}
-			<p role="alert" class="rounded-md bg-bad-soft px-3 py-2 text-[13px] text-bad">Could not check for updates: {updateError}</p>
-		{:else if update && update.update_available}
-			<div class="rounded-md bg-warn-soft p-4 text-[13px]" role="status">
-				<p class="font-medium">
-					Version {update.latest} is available.
-					{#if update.release_url}<a class="link inline-flex items-center gap-1" href={update.release_url} target="_blank" rel="noopener noreferrer">Release notes <Icon name="open_in_new" size={15} /></a>{/if}
+		{#if phase === 'updating'}
+			<div class="rounded-md bg-accent-soft p-4 text-[13px]" role="status" aria-live="polite">
+				<p class="flex items-center gap-2 font-medium">
+					<Icon name="progress_activity" size={18} class="animate-spin motion-reduce:animate-none" />
+					Updating to {target}…
 				</p>
-				<p class="mt-2 text-muted">Upgrade on the server by re-running the installer. Apps keep running; data and secrets are kept.</p>
-				<div class="mt-2 flex items-center gap-1">
-					<code class="input flex items-center overflow-x-auto bg-surface whitespace-nowrap">{upgradeCommand}</code>
-					<Copy value={upgradeCommand} label="Copy upgrade command" />
+				<p class="mt-2 text-muted">The panel restarts when the update finishes and this page reconnects by itself. Apps keep running.</p>
+				{#if stalled}
+					<p class="mt-2 text-warn">The updater has not started yet. If this server was installed before panel updates existed, re-run the installer on it once.</p>
+				{/if}
+			</div>
+		{:else if phase === 'failed'}
+			<div class="rounded-md bg-bad-soft p-4 text-[13px]" role="alert">
+				<p class="font-medium text-bad">{failure}</p>
+				{#if updateLog}
+					<pre class="mt-2 max-h-64 overflow-auto rounded-md bg-[var(--code-bg)] p-3 font-mono text-xs whitespace-pre-wrap">{updateLog}</pre>
+				{/if}
+				<div class="mt-3 flex gap-2">
+					<button class="btn" onclick={() => { phase = 'idle'; checkUpdates(); }}>Dismiss</button>
 				</div>
 			</div>
-		{:else if update}
+		{/if}
+		{#if updateError}
+			<p role="alert" class="rounded-md bg-bad-soft px-3 py-2 text-[13px] text-bad">Could not check for updates: {updateError}</p>
+		{:else if update && update.update_available && phase === 'idle'}
+			<div class="rounded-md bg-warn-soft p-4 text-[13px]" role="status">
+				<div class="flex flex-wrap items-center gap-3">
+					<p class="flex-1 font-medium">
+						Version {update.latest} is available.
+						{#if update.release_url}<a class="link inline-flex items-center gap-1" href={update.release_url} target="_blank" rel="noopener noreferrer">Release notes <Icon name="open_in_new" size={15} /></a>{/if}
+					</p>
+					{#if update.self_update}
+						<button class="btn btn-primary" onclick={() => (updateConfirmOpen = true)} disabled={requesting}>
+							<Icon name="vertical_align_bottom" size={18} /> Update to {update.latest}
+						</button>
+					{/if}
+				</div>
+				{#if update.self_update}
+					<details class="mt-2 text-muted">
+						<summary class="cursor-pointer">Or run the installer on the server yourself</summary>
+						<div class="mt-2 flex items-center gap-1">
+							<code class="input flex items-center overflow-x-auto bg-surface whitespace-nowrap">{upgradeCommand}</code>
+							<Copy value={upgradeCommand} label="Copy upgrade command" />
+						</div>
+					</details>
+				{:else}
+					<p class="mt-2 text-muted">Upgrade on the server by re-running the installer. Apps keep running; data and secrets are kept. After this upgrade you can update from this page.</p>
+					<div class="mt-2 flex items-center gap-1">
+						<code class="input flex items-center overflow-x-auto bg-surface whitespace-nowrap">{upgradeCommand}</code>
+						<Copy value={upgradeCommand} label="Copy upgrade command" />
+					</div>
+				{/if}
+			</div>
+		{:else if update && phase === 'idle'}
 			<p class="flex items-center gap-1.5 text-[13px] text-ok" role="status"><Icon name="check_circle" size={17} filled /> You are on the latest release ({update.latest}).</p>
 		{/if}
 	</div>
@@ -379,6 +506,10 @@
 		{/if}
 	</form>
 {/if}
+
+<Confirm bind:open={updateConfirmOpen} title={`Update to ${update?.latest ?? 'the latest release'}?`} confirmLabel="Update" busy={requesting} onconfirm={installUpdate}>
+	{'The server downloads the release, checks its checksum and restarts the panel, which is unavailable for a few seconds. Apps and their domains keep running. Data and secrets are kept.'}
+</Confirm>
 
 <Confirm bind:open={confirmOpen} title="Clean up disk now?" confirmLabel="Clean up" busy={cleaning} onconfirm={cleanNow}>
 	{`Old app images beyond the newest ${keep} per app are deleted, so you can no longer roll back to those deployments. Unused build cache is also cleared, so the next build of each app may take longer.`}

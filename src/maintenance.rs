@@ -1,6 +1,7 @@
-//! Disk cleanup of old app images (after each deploy, on a schedule, or on demand) and
-//! the release update check.
+//! Disk cleanup of old app images (after each deploy, on a schedule, or on demand), the
+//! release update check, and updates requested from the panel.
 
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -220,6 +221,8 @@ pub struct UpdateStatus {
     /// GitHub `owner/name` releases are checked against.
     pub repo: String,
     pub release_url: String,
+    /// The installer set up the updater, so the panel can install `latest` itself.
+    pub self_update: bool,
 }
 
 /// Compare the running version with the repository's latest GitHub release.
@@ -275,6 +278,7 @@ pub async fn check_for_updates() -> AppResult<UpdateStatus> {
         latest,
         repo,
         release_url: release.html_url,
+        self_update: false,
     })
 }
 
@@ -291,9 +295,194 @@ fn is_newer(candidate: &str, current: &str) -> bool {
     parts(candidate) > parts(current)
 }
 
+// ---------------------------------------------------------------- panel updates
+//
+// The panel never installs anything itself: it runs unprivileged and cannot replace its
+// own binary. The installer creates `<data_dir>/update/` and a root-owned helper that a
+// systemd path unit runs whenever `update/request` appears. The panel only writes the
+// release tag into that file; the helper deletes the request, runs that release's
+// installer (which verifies the binary's checksum and restarts the panel), appends its
+// output to `update/log` and writes `ok <tag>` or `failed <tag>` to `update/result`.
+
+const UPDATE_DIR: &str = "update";
+/// Shown with a failed update; the installer's output before the failure is enough.
+const LOG_TAIL_LINES: usize = 60;
+const LOG_TAIL_BYTES: usize = 64 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateState {
+    /// No update requested (or the last one's result was never recorded).
+    Idle,
+    /// Requested; the updater has not picked it up yet.
+    Pending,
+    /// The updater is running the installer.
+    Running,
+    Succeeded,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct UpdateProgress {
+    pub state: UpdateState,
+    /// Release tag being (or last) installed, e.g. `v0.2.0`.
+    pub version: Option<String>,
+    /// Version of the binary serving this response.
+    pub current: &'static str,
+    /// End of the updater's output; empty unless the update failed.
+    pub log: String,
+}
+
+/// The installer created the updater (older installs need one more manual run).
+pub fn self_update_available(data_dir: &Path) -> bool {
+    data_dir.join(UPDATE_DIR).is_dir()
+}
+
+/// Ask the updater to install release `version` (`0.2.0` or `v0.2.0`).
+pub async fn request_update(data_dir: &Path, version: &str) -> AppResult<UpdateProgress> {
+    let number = version.trim().trim_start_matches('v');
+    let valid = !number.is_empty()
+        && number.starts_with(|c: char| c.is_ascii_digit())
+        && number.len() <= 32
+        && number
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '+'));
+    if !valid {
+        return Err(AppError::validation(format!(
+            "invalid release version: {version:?}"
+        )));
+    }
+    if !is_newer(number, VERSION) {
+        return Err(AppError::validation(format!(
+            "{number} is not newer than the running version {VERSION}"
+        )));
+    }
+    if !self_update_available(data_dir) {
+        return Err(AppError::Conflict(
+            "updating from the panel needs the updater: re-run the installer on the server once"
+                .into(),
+        ));
+    }
+    let progress = update_progress(data_dir).await?;
+    if matches!(progress.state, UpdateState::Pending | UpdateState::Running) {
+        return Err(AppError::Conflict(
+            "an update is already in progress".into(),
+        ));
+    }
+
+    let dir = data_dir.join(UPDATE_DIR);
+    let tag = format!("v{number}");
+    remove_if_present(&dir.join("result")).await?;
+    let header = format!("Update to {tag} requested at {}\n", Utc::now().to_rfc3339());
+    tokio::fs::write(dir.join("log"), header)
+        .await
+        .map_err(|e| AppError::Internal(e.into()))?;
+    // Renamed into place, so the path unit never sees a half-written request.
+    let pending = dir.join("request.tmp");
+    tokio::fs::write(&pending, format!("{tag}\n"))
+        .await
+        .map_err(|e| AppError::Internal(e.into()))?;
+    tokio::fs::rename(&pending, dir.join("request"))
+        .await
+        .map_err(|e| AppError::Internal(e.into()))?;
+    update_progress(data_dir).await
+}
+
+pub async fn update_progress(data_dir: &Path) -> AppResult<UpdateProgress> {
+    let dir = data_dir.join(UPDATE_DIR);
+    let request = read_optional(&dir.join("request")).await?;
+    let result = read_optional(&dir.join("result")).await?;
+    let log_exists = tokio::fs::try_exists(dir.join("log"))
+        .await
+        .unwrap_or(false);
+
+    let (state, version) = if let Some(request) = request {
+        (UpdateState::Pending, Some(request.trim().to_string()))
+    } else if let Some(result) = result {
+        let mut parts = result.split_whitespace();
+        let outcome = parts.next().unwrap_or("");
+        let version = parts.next().map(str::to_string);
+        let state = if outcome == "ok" {
+            UpdateState::Succeeded
+        } else {
+            UpdateState::Failed
+        };
+        (state, version)
+    } else if log_exists {
+        (UpdateState::Running, None)
+    } else {
+        (UpdateState::Idle, None)
+    };
+    let log = if state == UpdateState::Failed {
+        log_tail(&dir.join("log")).await
+    } else {
+        String::new()
+    };
+    Ok(UpdateProgress {
+        state,
+        version,
+        current: VERSION,
+        log,
+    })
+}
+
+async fn read_optional(path: &Path) -> AppResult<Option<String>> {
+    match tokio::fs::read_to_string(path).await {
+        Ok(text) => Ok(Some(text)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(AppError::Internal(e.into())),
+    }
+}
+
+async fn remove_if_present(path: &Path) -> AppResult<()> {
+    match tokio::fs::remove_file(path).await {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(AppError::Internal(e.into())),
+    }
+}
+
+async fn log_tail(path: &Path) -> String {
+    let Ok(bytes) = tokio::fs::read(path).await else {
+        return String::new();
+    };
+    let start = bytes.len().saturating_sub(LOG_TAIL_BYTES);
+    let text = strip_ansi(&String::from_utf8_lossy(&bytes[start..]));
+    let lines: Vec<&str> = text.lines().collect();
+    lines[lines.len().saturating_sub(LOG_TAIL_LINES)..].join("\n")
+}
+
+/// Drop terminal escape sequences (`ESC [ ... letter`) that installers may print.
+fn strip_ansi(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' && chars.peek() == Some(&'[') {
+            chars.next();
+            for c in chars.by_ref() {
+                if c.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
-    use super::is_newer;
+    use super::{is_newer, strip_ansi};
+
+    #[test]
+    fn strips_terminal_colors() {
+        assert_eq!(
+            strip_ansi("\u{1b}[31mx run as root\u{1b}[0m done"),
+            "x run as root done"
+        );
+        assert_eq!(strip_ansi("plain [text]"), "plain [text]");
+    }
 
     #[test]
     fn compares_versions() {

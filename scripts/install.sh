@@ -25,6 +25,9 @@ DRY_RUN=0
 DATA_DIR="/var/lib/forgenerd"
 BIN_PATH="/usr/local/bin/forgenerd"
 UNIT_PATH="/etc/systemd/system/forgenerd.service"
+UPDATER_PATH="/usr/local/libexec/forgenerd-update"
+UPDATER_UNIT="/etc/systemd/system/forgenerd-update.service"
+UPDATER_WATCH="/etc/systemd/system/forgenerd-update.path"
 SERVICE_USER="forgenerd"
 PANEL_PORT=4367
 TOTAL_STEPS=7
@@ -418,6 +421,7 @@ fi
 # Docker socket access is root-equivalent; it is what forgenerd exists to use.
 run usermod -aG docker "$SERVICE_USER"
 run install -d -m 0700 -o "$SERVICE_USER" -g "$SERVICE_USER" "$DATA_DIR"
+run install -d -m 0700 -o "$SERVICE_USER" -g "$SERVICE_USER" "$DATA_DIR/update"
 result "$SERVICE_USER user, data in $DATA_DIR"
 
 # ---------------------------------------------------------------- systemd
@@ -460,6 +464,69 @@ EOF
 )
 printf '%s\n' "$unit" > "$tmp/forgenerd.service"
 run install -m 0644 "$tmp/forgenerd.service" "$UNIT_PATH"
+
+# Updates from the panel. The panel runs unprivileged and cannot replace its own binary,
+# so it only writes a release tag to $DATA_DIR/update/request. The path unit then runs
+# this root-owned helper, which installs that release with the release's own installer
+# (checksum-verified) and records the outcome for the panel. The repository is fixed
+# here and the tag is validated: the panel can name a version but nothing else.
+updater=$(cat <<EOF
+#!/usr/bin/env bash
+# Installs the forgenerd release requested from the panel. Run by forgenerd-update.path.
+set -uo pipefail
+main() {
+	local dir="$DATA_DIR/update"
+	local request="\$dir/request" log="\$dir/log" result="\$dir/result" version tmp
+	[ -f "\$request" ] || exit 0
+	version=\$(head -c 64 "\$request" | tr -d '[:space:]')
+	rm -f -- "\$request"
+	# Never write through links the service user could have planted.
+	[ ! -L "\$log" ] || rm -f -- "\$log"
+	[ ! -L "\$result" ] || rm -f -- "\$result"
+	exec >>"\$log" 2>&1
+	finish() {
+		printf '%s %s\n' "\$1" "\$version" >"\$result"
+		chown $SERVICE_USER:$SERVICE_USER "\$log" "\$result" 2>/dev/null || true
+		exit "\$2"
+	}
+	[[ "\$version" =~ ^v[0-9][A-Za-z0-9.+-]{0,31}\$ ]] || { echo "invalid release version"; finish failed 1; }
+	tmp=\$(mktemp -d /tmp/forgenerd-update.XXXXXX) || finish failed 1
+	trap 'rm -f -- "\$tmp/install.sh"; rmdir -- "\$tmp"' EXIT
+	echo "Downloading the \$version installer from $REPO"
+	curl -fsSL --retry 3 -o "\$tmp/install.sh" "https://github.com/$REPO/releases/download/\$version/install.sh" \\
+		|| { echo "could not download the installer for \$version"; finish failed 1; }
+	NO_COLOR=1 bash "\$tmp/install.sh" --version "\$version" --repo "$REPO" || finish failed 1
+	finish ok 0
+}
+# Parsed in full before it runs, so the installer can replace this file while it runs.
+main "\$@"
+EOF
+)
+printf '%s\n' "$updater" > "$tmp/forgenerd-update"
+cat > "$tmp/forgenerd-update.service" <<EOF
+[Unit]
+Description=Install the forgenerd release requested from the panel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=$UPDATER_PATH
+EOF
+cat > "$tmp/forgenerd-update.path" <<EOF
+[Unit]
+Description=Watch for forgenerd updates requested from the panel
+
+[Path]
+PathExists=$DATA_DIR/update/request
+
+[Install]
+WantedBy=multi-user.target
+EOF
+run install -d -m 0755 "$(dirname "$UPDATER_PATH")"
+run install -m 0755 "$tmp/forgenerd-update" "$UPDATER_PATH"
+run install -m 0644 "$tmp/forgenerd-update.service" "$UPDATER_UNIT"
+run install -m 0644 "$tmp/forgenerd-update.path" "$UPDATER_WATCH"
 run systemctl daemon-reload
 if [ "$UPGRADE" -eq 1 ]; then
 	run systemctl enable forgenerd
@@ -468,7 +535,8 @@ else
 	run systemctl enable --now forgenerd
 fi
 run systemctl is-active --quiet forgenerd
-if [ "$DRY_RUN" -eq 1 ]; then result "previewed"; else result "forgenerd.service is active"; fi
+run systemctl enable --now forgenerd-update.path
+if [ "$DRY_RUN" -eq 1 ]; then result "previewed"; else result "forgenerd.service is active, panel updates on"; fi
 
 # ---------------------------------------------------------------- firewall
 # Caddy (in Docker) reaches the panel on the forgenerd-internal gateway address. UFW's
