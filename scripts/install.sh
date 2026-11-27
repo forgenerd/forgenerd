@@ -166,6 +166,7 @@ render_pixels() {
 
 system_line() {
 	local os arch mem docker_v
+	# shellcheck source=/dev/null
 	os=$(. /etc/os-release 2>/dev/null && printf '%s' "${PRETTY_NAME:-}") || true
 	arch=$(uname -m)
 	mem=$(awk '/MemTotal/ {printf "%.1f GB RAM", $2 / 1048576}' /proc/meminfo 2>/dev/null || true)
