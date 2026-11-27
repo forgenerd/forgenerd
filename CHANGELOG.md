@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/forgenerd/forgenerd/compare/v0.2.1...v0.3.0) (2026-11-27)
+
+
+### Features
+
+* load blueprints from the online catalog ([8f63f95](https://github.com/forgenerd/forgenerd/commit/8f63f956ad380545c4708c95862431bdba4dc64f))
+
 ## [0.2.1](https://github.com/forgenerd/forgenerd/compare/v0.2.0...v0.2.1) (2026-11-27)
 
 
